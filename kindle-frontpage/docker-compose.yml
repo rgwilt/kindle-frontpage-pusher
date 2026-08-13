@@ -14,12 +14,12 @@ services:
       BACKGROUND: ${BACKGROUND:-white}
       CONTRAST: ${CONTRAST:-1.15}
       SHARPEN: ${SHARPEN:-true}
-      PORT: ${PORT:-8687}
+      PORT: ${PORT:-8080}
       MAX_ATTEMPTS_PER_CYCLE: ${MAX_ATTEMPTS_PER_CYCLE:-3}
       FETCH_ON_STARTUP: ${FETCH_ON_STARTUP:-true}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
-      - "${HOST_PORT:-8080}:8080"
+      - "${HOST_PORT:-8787}:8080"
     volumes:
       - kindle_frontpage_data:/app/data
 
