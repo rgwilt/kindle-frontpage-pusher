@@ -1,0 +1,27 @@
+services:
+  kindle-frontpage:
+    build: .
+    image: kindle-frontpage-pusher:latest
+    container_name: kindle-frontpage
+    restart: unless-stopped
+    environment:
+      NEWSPAPERS: ${NEWSPAPERS:-the-new-york-times,the-washington-post,usa-today,financial-times,the-herald-scotland,the-irish-times,new-york-post,chicago-tribune}
+      UPDATE_TIMES: ${UPDATE_TIMES:-07:00,13:00,19:00}
+      TZ: ${TZ:-Europe/London}
+      KINDLE_WIDTH: ${KINDLE_WIDTH:-1264}
+      KINDLE_HEIGHT: ${KINDLE_HEIGHT:-1680}
+      IMAGE_FIT: ${IMAGE_FIT:-contain}
+      BACKGROUND: ${BACKGROUND:-white}
+      CONTRAST: ${CONTRAST:-1.15}
+      SHARPEN: ${SHARPEN:-true}
+      PORT: ${PORT:-8080}
+      MAX_ATTEMPTS_PER_CYCLE: ${MAX_ATTEMPTS_PER_CYCLE:-3}
+      FETCH_ON_STARTUP: ${FETCH_ON_STARTUP:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${HOST_PORT:-8080}:8080"
+    volumes:
+      - kindle_frontpage_data:/app/data
+
+volumes:
+  kindle_frontpage_data:
