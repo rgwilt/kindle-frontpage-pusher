@@ -11,6 +11,7 @@ We fetch that page, pull the og:image URL out of it, and download the image.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from urllib.parse import urljoin
 
@@ -46,13 +47,10 @@ def _session() -> requests.Session:
     return s
 
 
-def fetch_front_page(slug: str) -> FrontPage:
-    """Fetch today's front page image for a given frontpages.com slug."""
-    page_url = urljoin(BASE_URL + "/", f"{slug.strip('/')}/")
-    sess = _session()
-
-    log.info("Fetching newspaper page: %s", page_url)
-    resp = sess.get(page_url, timeout=REQUEST_TIMEOUT)
+def _get_page(sess: requests.Session, page_url: str, slug: str, cache_bust: bool = False):
+    """Fetch the newspaper's page and pull out (image_url, display_name)."""
+    url = page_url if not cache_bust else f"{page_url}?_={int(time.time())}"
+    resp = sess.get(url, timeout=REQUEST_TIMEOUT)
     if resp.status_code != 200:
         raise ScrapeError(f"{slug}: page returned HTTP {resp.status_code}")
 
@@ -67,9 +65,41 @@ def fetch_front_page(slug: str) -> FrontPage:
     name = title_tag.get("content") if title_tag and title_tag.get("content") else (
         title_tag.text.strip() if title_tag else slug
     )
+    return image_url, name
+
+
+def _download_image(sess: requests.Session, image_url: str, page_url: str):
+    """Download an image URL, sending a Referer so anti-hotlinking rules don't 404 us."""
+    headers = {
+        "Referer": page_url,
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+    }
+    return sess.get(image_url, headers=headers, timeout=REQUEST_TIMEOUT)
+
+
+def fetch_front_page(slug: str) -> FrontPage:
+    """Fetch today's front page image for a given frontpages.com slug."""
+    page_url = urljoin(BASE_URL + "/", f"{slug.strip('/')}/")
+    sess = _session()
+
+    log.info("Fetching newspaper page: %s", page_url)
+    image_url, name = _get_page(sess, page_url, slug)
 
     log.info("Downloading front page image: %s", image_url)
-    img_resp = sess.get(image_url, timeout=REQUEST_TIMEOUT)
+    img_resp = _download_image(sess, image_url, page_url)
+
+    if img_resp.status_code == 404:
+        # The page's cached og:image can lag behind what's actually on the
+        # image CDN (front pages get regenerated through the day). Re-fetch
+        # the page with a cache-busting query string and try once more
+        # before giving up on this newspaper.
+        log.warning(
+            "%s: image 404'd, retrying with a fresh (cache-busted) page fetch", slug
+        )
+        image_url, name = _get_page(sess, page_url, slug, cache_bust=True)
+        log.info("Retrying download: %s", image_url)
+        img_resp = _download_image(sess, image_url, page_url)
+
     if img_resp.status_code != 200 or not img_resp.content:
         raise ScrapeError(f"{slug}: image download returned HTTP {img_resp.status_code}")
 
