@@ -14,7 +14,7 @@
 # running the Docker container.
 
 # EDIT THIS: host:port of the machine running the kindle-frontpage container.
-SERVER_URL="http://192.168.1.10:8080/current.png"
+SERVER_URL="http://192.168.0.184:8787/current.png"
 
 DEST_DIR="/mnt/us/frontpage"
 DEST="$DEST_DIR/current.png"
