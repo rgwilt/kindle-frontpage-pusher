@@ -2,8 +2,13 @@ services:
   kindle-frontpage:
     build: .
     image: kindle-frontpage-pusher:latest
+    pull_policy: build
     container_name: kindle-frontpage
     restart: unless-stopped
+    # Headless Chromium needs more than Docker's default 64MB /dev/shm, or
+    # it can crash mid-render. Also passed --disable-dev-shm-usage as a
+    # second line of defense in scraper.py.
+    shm_size: "1gb"
     environment:
       NEWSPAPERS: ${NEWSPAPERS:-the-new-york-times,the-washington-post,usa-today,financial-times,the-herald-scotland,the-irish-times,new-york-post,chicago-tribune}
       UPDATE_TIMES: ${UPDATE_TIMES:-07:00,13:00,19:00}
