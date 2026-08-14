@@ -10,6 +10,8 @@ services:
       HEADLINES_PER_FEED: ${HEADLINES_PER_FEED:-5}
       TOTAL_HEADLINES: ${TOTAL_HEADLINES:-18}
       PAPER_NAME: ${PAPER_NAME:-THE KINDLE TIMES}
+      GOODREADS_USER_ID: ${GOODREADS_USER_ID:-70021579-richard-gwilt}
+      GOODREADS_SHELF: ${GOODREADS_SHELF:-currently-reading}
       UPDATE_TIMES: ${UPDATE_TIMES:-07:00,13:00,19:00}
       TZ: ${TZ:-Europe/London}
       KINDLE_WIDTH: ${KINDLE_WIDTH:-1264}
@@ -18,7 +20,7 @@ services:
       FETCH_ON_STARTUP: ${FETCH_ON_STARTUP:-true}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
-      - "${HOST_PORT:-8787}:8080"
+      - "${HOST_PORT:-8080}:8080"
     volumes:
       - kindle_frontpage_data:/app/data
 
