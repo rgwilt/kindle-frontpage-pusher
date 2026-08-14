@@ -23,6 +23,7 @@ class State:
             "last_success_at": None,
             "last_error": None,
             "last_attempt_at": None,
+            "now_reading": None,
         }
         self._load()
 
@@ -50,11 +51,14 @@ class State:
             self._data["last_attempt_at"] = datetime.now(timezone.utc).isoformat()
             self._save()
 
-    def record_success(self, headlines_used: int, sources_used: list, failed_feeds: list) -> None:
+    def record_success(
+        self, headlines_used: int, sources_used: list, failed_feeds: list, now_reading: str | None = None
+    ) -> None:
         with _lock:
             self._data["headlines_used"] = headlines_used
             self._data["sources_used"] = sources_used
             self._data["failed_feeds"] = failed_feeds
+            self._data["now_reading"] = now_reading
             self._data["last_success_at"] = datetime.now(timezone.utc).isoformat()
             self._data["last_error"] = None
             self._save()

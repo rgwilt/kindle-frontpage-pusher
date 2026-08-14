@@ -40,6 +40,16 @@ class Config:
 
     PAPER_NAME = os.environ.get("PAPER_NAME", "THE KINDLE TIMES")
 
+    # "Now Reading" corner box: pulls the first book on this Goodreads
+    # shelf (public profile, no API key needed) and shows its cover, title/
+    # author, and average rating in the bottom-right corner of every
+    # template. Leave GOODREADS_USER_ID empty to disable the feature
+    # entirely -- the page just renders with no reserved space for it, same
+    # as before this existed. ID can be the numeric id alone or the full
+    # "id-slug" form from a profile URL (goodreads.com/user/show/<this>).
+    GOODREADS_USER_ID = os.environ.get("GOODREADS_USER_ID", "70021579-richard-gwilt")
+    GOODREADS_SHELF = os.environ.get("GOODREADS_SHELF", "currently-reading")
+
     # Times of day (24h HH:MM, in TZ below) at which to refresh the digest.
     UPDATE_TIMES = _split_csv(os.environ.get("UPDATE_TIMES", "07:00,13:00,19:00"))
 

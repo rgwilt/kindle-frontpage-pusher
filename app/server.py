@@ -59,6 +59,7 @@ def build_app(state, trigger_update) -> Flask:
         s["feeds"] = [name for name, _ in Config.RSS_FEEDS]
         s["update_times"] = Config.UPDATE_TIMES
         s["timezone"] = Config.TZ
+        s["goodreads_enabled"] = bool(Config.GOODREADS_USER_ID)
         return jsonify(s)
 
     @app.get("/healthz")

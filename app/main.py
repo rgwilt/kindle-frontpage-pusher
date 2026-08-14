@@ -8,6 +8,7 @@ from apscheduler.triggers.cron import CronTrigger
 from waitress import serve
 
 from config import Config
+from goodreads import fetch_currently_reading
 from headlines import fetch_headlines
 from layout import render_digest
 from server import build_app
@@ -52,12 +53,25 @@ def run_update_cycle() -> None:
         state.record_error(msg)
         return
 
+    # Best-effort "Now Reading" corner box -- a failure here (Goodreads down,
+    # shelf empty, feed format changed) should never take down the whole
+    # digest, so it's fetched separately from the headlines and defaults to
+    # None (meaning: don't reserve any space for it) on any problem.
+    book = None
+    if Config.GOODREADS_USER_ID:
+        try:
+            book = fetch_currently_reading(Config.GOODREADS_USER_ID, shelf=Config.GOODREADS_SHELF)
+        except Exception as e:  # noqa: BLE001 - never let this abort the digest
+            log.warning("Unexpected error fetching Goodreads shelf: %s", e)
+            book = None
+
     try:
         png_bytes, used = render_digest(
             headlines,
             width=Config.KINDLE_WIDTH,
             height=Config.KINDLE_HEIGHT,
             paper_name=Config.PAPER_NAME,
+            book=book,
         )
         with open(Config.CURRENT_IMAGE_PATH, "wb") as f:
             f.write(png_bytes)
@@ -67,12 +81,16 @@ def run_update_cycle() -> None:
         return
 
     sources_used = sorted({h.source for h in headlines[:used]})
-    state.record_success(headlines_used=used, sources_used=sources_used, failed_feeds=failed)
+    now_reading = f"{book.title} by {book.author}" if book and book.author else (book.title if book else None)
+    state.record_success(
+        headlines_used=used, sources_used=sources_used, failed_feeds=failed, now_reading=now_reading
+    )
     log.info(
-        "Update cycle succeeded: %d headline(s) from %s%s",
+        "Update cycle succeeded: %d headline(s) from %s%s%s",
         used,
         ", ".join(sources_used),
         f" (failed: {', '.join(failed)})" if failed else "",
+        f"; now reading: {now_reading}" if now_reading else "",
     )
 
 
@@ -97,9 +115,11 @@ def start_scheduler() -> BackgroundScheduler:
 
 def main() -> None:
     log.info(
-        "Starting kindle-frontpage-pusher: %d feed(s), %dx%d target, updates at %s (%s)",
+        "Starting kindle-frontpage-pusher: %d feed(s), %dx%d target, updates at %s (%s), "
+        "Goodreads corner box %s",
         len(Config.RSS_FEEDS), Config.KINDLE_WIDTH, Config.KINDLE_HEIGHT,
         ", ".join(Config.UPDATE_TIMES), Config.TZ,
+        f"enabled ({Config.GOODREADS_USER_ID}, shelf={Config.GOODREADS_SHELF})" if Config.GOODREADS_USER_ID else "disabled",
     )
 
     if Config.FETCH_ON_STARTUP:
