@@ -29,10 +29,50 @@ class Headline:
     title: str
     source: str
     link: str
+    image_url: str | None = None
 
 
 class FeedError(RuntimeError):
     """Raised when a single feed can't be fetched or parsed."""
+
+
+def _extract_image_url(entry) -> str | None:
+    """
+    Best-effort extraction of a per-entry thumbnail URL from whichever RSS/Atom
+    media extension the feed happens to use. Only looks at structured feed
+    fields (media:thumbnail, media:content, <enclosure>) -- deliberately does
+    NOT try to scrape an <img> out of content:encoded HTML, since some feeds
+    (NPR, at least) put unusable placeholder src values there (e.g. "undefined")
+    that would just produce broken-image fetches downstream.
+    """
+    def _valid(url) -> str | None:
+        return url if isinstance(url, str) and url.startswith(("http://", "https://")) else None
+
+    thumbs = getattr(entry, "media_thumbnail", None)
+    if thumbs:
+        url = _valid(thumbs[0].get("url"))
+        if url:
+            return url
+
+    contents = getattr(entry, "media_content", None)
+    if contents:
+        for item in contents:
+            if item.get("medium") == "image" or item.get("type", "").startswith("image"):
+                url = _valid(item.get("url"))
+                if url:
+                    return url
+        # No entry explicitly typed as an image -- fall back to the first one.
+        url = _valid(contents[0].get("url"))
+        if url:
+            return url
+
+    for link in getattr(entry, "links", None) or []:
+        if link.get("rel") == "enclosure" and link.get("type", "").startswith("image"):
+            url = _valid(link.get("href"))
+            if url:
+                return url
+
+    return None
 
 
 def _fetch_one_feed(name: str, url: str, limit: int) -> list[Headline]:
@@ -52,7 +92,9 @@ def _fetch_one_feed(name: str, url: str, limit: int) -> list[Headline]:
         link = getattr(entry, "link", "") or ""
         if not title:
             continue
-        headlines.append(Headline(title=title.strip(), source=name, link=link))
+        headlines.append(
+            Headline(title=title.strip(), source=name, link=link, image_url=_extract_image_url(entry))
+        )
     return headlines
 
 
