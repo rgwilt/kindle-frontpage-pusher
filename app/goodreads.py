@@ -13,7 +13,9 @@ this project -- the corner box simply doesn't render that cycle.
 """
 from __future__ import annotations
 
+import html as html_module
 import logging
+import re
 from dataclasses import dataclass
 
 import feedparser
@@ -35,6 +37,7 @@ class BookPick:
     author: str
     rating: float | None  # the book's average Goodreads rating out of 5, if available
     cover_url: str | None
+    description: str | None = None  # plain-text synopsis, used as filler in the corner box
     link: str = ""
 
 
@@ -44,6 +47,13 @@ def _first_present(entry, *field_names):
         if val:
             return val
     return None
+
+
+def _strip_html(text: str) -> str:
+    """Goodreads' book_description field is HTML -- strip tags/entities down to plain text."""
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html_module.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def fetch_currently_reading(user_id: str, shelf: str = "currently-reading") -> BookPick | None:
@@ -106,9 +116,15 @@ def fetch_currently_reading(user_id: str, shelf: str = "currently-reading") -> B
             except (TypeError, ValueError):
                 rating = None
 
+        raw_description = _first_present(entry, "book_description", "summary", "description")
+        description = _strip_html(raw_description) if raw_description else None
+
         link = getattr(entry, "link", "") or ""
 
-        return BookPick(title=title, author=author or "", rating=rating, cover_url=cover_url, link=link)
+        return BookPick(
+            title=title, author=author or "", rating=rating, cover_url=cover_url,
+            description=description, link=link,
+        )
     except Exception as e:  # noqa: BLE001 - any failure just means no corner box this cycle
         log.warning("Goodreads fetch failed: %s", e)
         return None

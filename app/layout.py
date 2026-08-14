@@ -23,10 +23,14 @@ candidate, same fallback philosophy as a failed RSS feed not aborting the
 whole digest.
 
 Optionally, passing a `book` (a goodreads.BookPick or any object with
-.title/.author/.rating/.cover_url) reserves a small "Now Reading" box in
-the bottom-right corner across all four templates -- a fluff piece with the
-book's cover, title/author, and star rating. Omitted entirely (no space
-reserved at all) when `book` is None, so this is fully opt-in.
+.title/.author/.rating/.cover_url/.description) reserves a "Now Reading" box
+in the bottom-right corner across all four templates -- a fluff piece with
+the book's cover, title/author, star rating, and (space permitting) a short
+synopsis used as filler text. Only the column(s) that actually sit under the
+box's footprint yield room for it -- other columns in the same template run
+all the way to the true page bottom, so the box doesn't waste whitespace
+elsewhere on the page. Omitted entirely (no space reserved at all) when
+`book` is None, so this is fully opt-in.
 """
 from __future__ import annotations
 
@@ -61,9 +65,9 @@ IMAGE_FETCH_TIMEOUT = (5, 10)  # (connect, read) seconds -- keeps one slow host 
 IMAGE_FETCH_MAX_BYTES = 6 * 1024 * 1024  # safety cap against an unexpectedly huge response
 
 BOOK_BOX_WIDTH = 340
-BOOK_BOX_HEIGHT = 280
-BOOK_COVER_WIDTH = 110
-BOOK_COVER_HEIGHT = 165
+BOOK_BOX_HEIGHT = 480
+BOOK_COVER_WIDTH = 120
+BOOK_COVER_HEIGHT = 180
 
 _FONT_CACHE: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}
 
@@ -191,9 +195,11 @@ def _draw_book_corner(canvas, draw, width, height, book) -> None:
     Draws the "Now Reading" corner box in the bottom-right, using whatever
     fixed footprint render_digest() already reserved (BOOK_BOX_WIDTH x
     BOOK_BOX_HEIGHT). A fluff piece alongside the news: book cover (if it
-    downloads), title/author, and star rating. Degrades gracefully piece by
-    piece -- missing cover, missing rating, or missing author all just omit
-    that element rather than failing the whole box.
+    downloads), title/author, star rating, and -- if there's still room --
+    a short synopsis used purely as filler so the box doesn't leave a big
+    blank gap under a short title. Degrades gracefully piece by piece --
+    missing cover, missing rating, missing author, or missing description
+    all just omit that element rather than failing the whole box.
     """
     x0 = width - MARGIN - BOOK_BOX_WIDTH
     y0 = height - MARGIN - BOOK_BOX_HEIGHT
@@ -209,6 +215,7 @@ def _draw_book_corner(canvas, draw, width, height, book) -> None:
 
     text_x = x0 + pad
     text_width = (x1 - pad) - text_x
+    cover_bottom = content_top  # how far down the cover image itself reaches, if any
 
     cover = _download_image(getattr(book, "cover_url", None)) if getattr(book, "cover_url", None) else None
     if cover is not None:
@@ -216,6 +223,7 @@ def _draw_book_corner(canvas, draw, width, height, book) -> None:
         canvas.paste(fitted, (x0 + pad, content_top))
         text_x = x0 + pad + BOOK_COVER_WIDTH + 14
         text_width = (x1 - pad) - text_x
+        cover_bottom = content_top + BOOK_COVER_HEIGHT
 
     title_font = _font(FONT_SERIF_BOLD, 20)
     author_font = _font(FONT_SERIF_ITALIC, 16)
@@ -239,6 +247,39 @@ def _draw_book_corner(canvas, draw, width, height, book) -> None:
             _draw_rating_stars(draw, text_x, ty + 11, rating, star_r=10, gap=5)
             rating_font = _font(FONT_SERIF_REGULAR, 15)
             draw.text((text_x, ty + 24), f"{rating:.2f} avg rating", font=rating_font, fill=90)
+            ty += 24 + rating_font.size + 14
+
+    # Below the title/author/rating block, keep filling downward with the
+    # synopsis (if any) as pure filler -- first alongside the cover using
+    # the narrower text column, then across the box's full width once the
+    # cover's own height has been cleared, so a short description doesn't
+    # look cramped and a long one uses the whole box.
+    description = (getattr(book, "description", "") or "").strip()
+    if description:
+        desc_font = _font(FONT_SERIF_REGULAR, 15)
+        line_h = int(desc_font.size * LINE_SPACING)
+        ty = max(ty, content_top) + 4
+        full_width_x = x0 + pad
+        full_width_w = (x1 - pad) - full_width_x
+
+        while True:
+            at_full_width = ty >= cover_bottom + 6
+            cur_x = full_width_x if at_full_width else text_x
+            cur_w = full_width_w if at_full_width else text_width
+            if ty + line_h > y1 - pad:
+                break
+            lines = _wrap_text(draw, description, desc_font, cur_w)
+            if not lines:
+                break
+            line = lines[0]
+            draw.text((cur_x, ty), line, font=desc_font, fill=60)
+            consumed = len(line)
+            # Advance past the words just drawn (roughly -- _wrap_text
+            # already broke on word boundaries so this stays word-aligned).
+            description = description[consumed:].strip()
+            ty += line_h
+            if not description:
+                break
 
 
 def _draw_masthead(draw, width, paper_name, date_str) -> int:
@@ -282,22 +323,25 @@ def _block_height(draw, col_width, headline, headline_font, source_font) -> int:
     return n_lines * line_h + 8 + source_font.size + 12 + 14
 
 
-def _layout_columns(draw, headlines, columns, headline_font, source_font, body_bottom) -> tuple[int, list]:
+def _layout_columns(draw, headlines, columns, headline_font, source_font) -> tuple[int, list]:
     """
-    Greedily fills `columns` (list of (x, width, start_y)) with headline
-    blocks, always adding the next block to whichever column currently has
-    the most room. Returns (count_used, final_y_per_column).
+    Greedily fills `columns` (list of (x, width, start_y, bottom_y) -- each
+    column can have its OWN bottom bound, e.g. a rightmost column that needs
+    to stop short of a "Now Reading" box while other columns run to the full
+    page bottom) with headline blocks, always adding the next block to
+    whichever column currently has the most room left before its own bottom.
+    Returns (count_used, final_y_per_column).
     """
     col_y = [c[2] for c in columns]
     used = 0
     for h in headlines:
-        # Pick the column with the most remaining room.
-        idx = min(range(len(columns)), key=lambda i: col_y[i])
-        x, width, _ = columns[idx]
+        # Pick the column with the most remaining room before its own bottom bound.
+        idx = max(range(len(columns)), key=lambda i: columns[i][3] - col_y[i])
+        x, width, _, bottom = columns[idx]
         h_height = _block_height(draw, width, h, headline_font, source_font)
-        if col_y[idx] + h_height > body_bottom:
+        if col_y[idx] + h_height > bottom:
             # No column has room left.
-            if all(col_y[i] + _block_height(draw, columns[i][1], h, headline_font, source_font) > body_bottom
+            if all(col_y[i] + _block_height(draw, columns[i][1], h, headline_font, source_font) > columns[i][3]
                    for i in range(len(columns))):
                 break
             continue
@@ -306,19 +350,22 @@ def _layout_columns(draw, headlines, columns, headline_font, source_font, body_b
     return used, col_y
 
 
-def _template_lead_grid(canvas, draw, width, height, headlines, body_top, body_bottom, lead_img=None) -> int:
+def _template_lead_grid(canvas, draw, width, height, headlines, body_top, body_bottom, lead_img=None, book=None) -> int:
     """One big lead story across the top (with a photo if one was found), remaining headlines in a 2-col grid below."""
     if not headlines:
         return 0
     y = body_top
     hero_font_size = 58
+    # Only the RIGHTMOST column needs to yield room to the "Now Reading" box
+    # (it sits bottom-right) -- the left column runs all the way down.
+    reserved_bottom = body_bottom - (BOOK_BOX_HEIGHT + 18) if book is not None else body_bottom
 
     if lead_img is not None:
         img_box_w = width - 2 * MARGIN
         img_box_h = 340
         # Only place it if there's realistically room left for the headline
         # text and at least some of the grid below it.
-        if y + img_box_h + 300 <= body_bottom:
+        if y + img_box_h + 300 <= reserved_bottom:
             fitted = ImageOps.fit(lead_img, (img_box_w, img_box_h), method=Image.LANCZOS)
             canvas.paste(fitted, (MARGIN, y))
             y += img_box_h + 18
@@ -333,21 +380,26 @@ def _template_lead_grid(canvas, draw, width, height, headlines, body_top, body_b
     headline_font = _font(FONT_SERIF_BOLD, 32)
     source_font = _font(FONT_SERIF_ITALIC, 21)
     col_width = (width - 2 * MARGIN - GUTTER) // 2
-    columns = [(MARGIN, col_width, y), (MARGIN + col_width + GUTTER, col_width, y)]
-    used, col_y = _layout_columns(draw, headlines[1:], columns, headline_font, source_font, body_bottom)
+    columns = [
+        (MARGIN, col_width, y, body_bottom),
+        (MARGIN + col_width + GUTTER, col_width, y, reserved_bottom),
+    ]
+    used, col_y = _layout_columns(draw, headlines[1:], columns, headline_font, source_font)
 
     gutter_x = MARGIN + col_width + GUTTER // 2
     draw.line([(gutter_x, y), (gutter_x, max(col_y))], fill=180, width=1)
     return used + 1
 
 
-def _template_split_feature(canvas, draw, width, height, headlines, body_top, body_bottom, lead_img=None) -> int:
+def _template_split_feature(canvas, draw, width, height, headlines, body_top, body_bottom, lead_img=None, book=None) -> int:
     """A wide feature column on the left (with a photo above it if one was found), a narrower stacked sidebar on the right."""
     if not headlines:
         return 0
     left_width = int((width - 2 * MARGIN - GUTTER) * 0.6)
     right_x = MARGIN + left_width + GUTTER
     right_width = width - 2 * MARGIN - GUTTER - left_width
+    # The right sidebar sits under the "Now Reading" box's x-range -- only it yields room.
+    reserved_bottom = body_bottom - (BOOK_BOX_HEIGHT + 18) if book is not None else body_bottom
 
     left_top = body_top
     if lead_img is not None:
@@ -359,28 +411,26 @@ def _template_split_feature(canvas, draw, width, height, headlines, body_top, bo
 
     feature_font = _font(FONT_SERIF_BOLD, 46)
     feature_source_font = _font(FONT_SERIF_ITALIC, 24)
-    left_columns = [(MARGIN, left_width, left_top)]
-    left_used, left_y = _layout_columns(
-        draw, headlines[:4], left_columns, feature_font, feature_source_font, body_bottom
-    )
+    left_columns = [(MARGIN, left_width, left_top, body_bottom)]
+    left_used, left_y = _layout_columns(draw, headlines[:4], left_columns, feature_font, feature_source_font)
 
     sidebar_font = _font(FONT_SERIF_BOLD, 25)
     sidebar_source_font = _font(FONT_SERIF_ITALIC, 18)
-    right_columns = [(right_x, right_width, body_top)]
-    right_used, right_y = _layout_columns(
-        draw, headlines[left_used:], right_columns, sidebar_font, sidebar_source_font, body_bottom
-    )
+    right_columns = [(right_x, right_width, body_top, reserved_bottom)]
+    right_used, right_y = _layout_columns(draw, headlines[left_used:], right_columns, sidebar_font, sidebar_source_font)
 
     divider_x = MARGIN + left_width + GUTTER // 2
     draw.line([(divider_x, body_top), (divider_x, max(left_y[0], right_y[0]))], fill=180, width=1)
     return left_used + right_used
 
 
-def _template_three_column(canvas, draw, width, height, headlines, body_top, body_bottom, lead_img=None) -> int:
+def _template_three_column(canvas, draw, width, height, headlines, body_top, body_bottom, lead_img=None, book=None) -> int:
     """A dense, wire-service-style grid: three narrower columns, more compact type. A photo (if found) runs as a compact thumbnail above column one."""
     headline_font = _font(FONT_SERIF_BOLD, 26)
     source_font = _font(FONT_SERIF_ITALIC, 18)
     col_width = (width - 2 * MARGIN - 2 * GUTTER) // 3
+    # Only column three (rightmost) sits under the "Now Reading" box.
+    reserved_bottom = body_bottom - (BOOK_BOX_HEIGHT + 18) if book is not None else body_bottom
 
     col0_top = body_top
     if lead_img is not None:
@@ -391,18 +441,18 @@ def _template_three_column(canvas, draw, width, height, headlines, body_top, bod
             col0_top = body_top + img_box_h + 18
 
     columns = [
-        (MARGIN, col_width, col0_top),
-        (MARGIN + col_width + GUTTER, col_width, body_top),
-        (MARGIN + 2 * (col_width + GUTTER), col_width, body_top),
+        (MARGIN, col_width, col0_top, body_bottom),
+        (MARGIN + col_width + GUTTER, col_width, body_top, body_bottom),
+        (MARGIN + 2 * (col_width + GUTTER), col_width, body_top, reserved_bottom),
     ]
-    used, col_y = _layout_columns(draw, headlines, columns, headline_font, source_font, body_bottom)
+    used, col_y = _layout_columns(draw, headlines, columns, headline_font, source_font)
     for i in (0, 1):
         gx = columns[i][0] + col_width + GUTTER // 2
         draw.line([(gx, body_top), (gx, max(col_y))], fill=180, width=1)
     return used
 
 
-def _template_banner_feature(canvas, draw, width, height, headlines, body_top, body_bottom, lead_img=None) -> int:
+def _template_banner_feature(canvas, draw, width, height, headlines, body_top, body_bottom, lead_img=None, book=None) -> int:
     """
     A poster-style layout inspired by magazine-cover newspaper mockups:
     a small letter-spaced eyebrow label, an optional lead photo, one
@@ -412,6 +462,10 @@ def _template_banner_feature(canvas, draw, width, height, headlines, body_top, b
     if not headlines:
         return 0
     y = body_top
+    # Full-width elements (feature box) and the rightmost grid column both
+    # sit above the "Now Reading" box's row -- only the left grid column
+    # runs to the true page bottom.
+    reserved_bottom = body_bottom - (BOOK_BOX_HEIGHT + 18) if book is not None else body_bottom
 
     eyebrow_font = _font(FONT_SERIF_REGULAR, 22)
     draw.text((MARGIN, y), _spaced("TOP STORY"), font=eyebrow_font, fill=0)
@@ -421,7 +475,7 @@ def _template_banner_feature(canvas, draw, width, height, headlines, body_top, b
     if lead_img is not None:
         img_box_w = width - 2 * MARGIN
         img_box_h = 320
-        if y + img_box_h + 320 <= body_bottom:
+        if y + img_box_h + 320 <= reserved_bottom:
             fitted = ImageOps.fit(lead_img, (img_box_w, img_box_h), method=Image.LANCZOS)
             canvas.paste(fitted, (MARGIN, y))
             y += img_box_h + 18
@@ -447,7 +501,7 @@ def _template_banner_feature(canvas, draw, width, height, headlines, body_top, b
         lines = _wrap_text(draw, headlines[1].title.upper(), feature_font, text_width)
         line_h = int(feature_font.size * LINE_SPACING)
         box_height = padding * 2 + len(lines) * line_h + 10 + feature_source_font.size
-        if lines and y + box_height <= body_bottom:
+        if lines and y + box_height <= reserved_bottom:
             draw.rectangle([(MARGIN, y), (MARGIN + box_width, y + box_height)], fill=0)
             ty = y + padding
             for line in lines:
@@ -461,8 +515,11 @@ def _template_banner_feature(canvas, draw, width, height, headlines, body_top, b
     headline_font = _font(FONT_SERIF_BOLD, 28)
     source_font = _font(FONT_SERIF_ITALIC, 19)
     col_width = (width - 2 * MARGIN - GUTTER) // 2
-    columns = [(MARGIN, col_width, y), (MARGIN + col_width + GUTTER, col_width, y)]
-    more_used, col_y = _layout_columns(draw, headlines[used:], columns, headline_font, source_font, body_bottom)
+    columns = [
+        (MARGIN, col_width, y, body_bottom),
+        (MARGIN + col_width + GUTTER, col_width, y, reserved_bottom),
+    ]
+    more_used, col_y = _layout_columns(draw, headlines[used:], columns, headline_font, source_font)
     if more_used:
         gutter_x = MARGIN + col_width + GUTTER // 2
         draw.line([(gutter_x, y), (gutter_x, max(col_y))], fill=180, width=1)
@@ -508,10 +565,10 @@ def render_digest(
 
     body_top = _draw_masthead(draw, width, paper_name, date_str)
     body_bottom = height - MARGIN
-    if book is not None:
-        # Reserve the corner box's footprint across the full width so no
-        # template's columns can run underneath it, then draw it last.
-        body_bottom -= BOOK_BOX_HEIGHT + 18
+    # Note: the book box's footprint is NOT reserved here across the full
+    # width. Each template reserves room only in the column(s) that actually
+    # sit under the box (bottom-right), passing `book` through so other
+    # columns can run all the way to the true page bottom.
 
     # Search the first few headlines for one whose feed-provided image
     # actually downloads, and promote that story to the lead slot so every
@@ -524,7 +581,7 @@ def render_digest(
 
     chosen = template or random.choice(list(TEMPLATES))
     log.info("Rendering digest using template '%s'%s", chosen, " with lead photo" if lead_img is not None else "")
-    used = TEMPLATES[chosen](canvas, draw, width, height, headlines, body_top, body_bottom, lead_img)
+    used = TEMPLATES[chosen](canvas, draw, width, height, headlines, body_top, body_bottom, lead_img, book)
 
     dropped = len(headlines) - used
     if dropped > 0:
