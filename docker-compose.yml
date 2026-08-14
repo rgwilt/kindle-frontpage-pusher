@@ -20,7 +20,7 @@ services:
       FETCH_ON_STARTUP: ${FETCH_ON_STARTUP:-true}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
-      - "${HOST_PORT:-8080}:8080"
+      - "${HOST_PORT:-8787}:8080"
     volumes:
       - kindle_frontpage_data:/app/data
 
