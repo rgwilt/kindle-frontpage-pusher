@@ -17,6 +17,7 @@ capture -- there's no separate "guess the CDN URL" step to get wrong.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -31,9 +32,36 @@ USER_AGENT = (
 )
 NAV_TIMEOUT_MS = 30_000
 IMAGE_TIMEOUT_MS = 20_000
+CONSENT_TIMEOUT_MS = 5_000
 
 # The site renders each front page as <img alt="Cover <Name> <date>" ...>.
 COVER_IMAGE_SELECTOR = "img[alt^='Cover']"
+
+# Every fetch starts a fresh browser context (no saved cookies), so the
+# site's cookie-consent dialog (a Quantcast-style CMP: "frontpages.com asks
+# for your consent" / "Consent and continue") shows up every time and
+# visually sits on top of the front page image -- a screenshot of the image
+# element still picks up whatever's rendered over it. Dismiss it first.
+CONSENT_BUTTON_PATTERN = re.compile(
+    r"consent and continue|accept all|accept cookies|^accept$|^agree$|^allow all$", re.I
+)
+
+
+def _dismiss_cookie_consent(page) -> None:
+    """Best-effort click of a cookie-consent "accept" button, if one is showing."""
+    candidates = [page] + list(page.frames)
+    for frame in candidates:
+        try:
+            button = frame.get_by_role("button", name=CONSENT_BUTTON_PATTERN).first
+            button.click(timeout=CONSENT_TIMEOUT_MS)
+            page.wait_for_timeout(500)  # let the dialog's dismiss animation finish
+            log.info("Dismissed a cookie-consent dialog")
+            return
+        except PlaywrightTimeoutError:
+            continue
+        except Exception:  # noqa: BLE001 - any frame/selector oddity, just move on
+            continue
+    log.info("No cookie-consent dialog found (or it was already dismissed)")
 
 
 class ScrapeError(RuntimeError):
@@ -80,6 +108,8 @@ def fetch_front_page(slug: str) -> FrontPage:
                     page.wait_for_load_state("load", timeout=NAV_TIMEOUT_MS)
                 except PlaywrightTimeoutError as e:
                     raise ScrapeError(f"{slug}: page never finished loading ({page_url})") from e
+
+            _dismiss_cookie_consent(page)
 
             locator = page.locator(COVER_IMAGE_SELECTOR).first
             try:
