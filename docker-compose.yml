@@ -1,0 +1,26 @@
+services:
+  kindle-frontpage:
+    build: .
+    image: kindle-frontpage-pusher:latest
+    pull_policy: build
+    container_name: kindle-frontpage
+    restart: unless-stopped
+    environment:
+      RSS_FEEDS: ${RSS_FEEDS:-BBC News|http://feeds.bbci.co.uk/news/rss.xml,BBC World|https://feeds.bbci.co.uk/news/world/rss.xml,Sky News|https://feeds.skynews.com/feeds/rss/home.xml,NPR|https://feeds.npr.org/1001/rss.xml}
+      HEADLINES_PER_FEED: ${HEADLINES_PER_FEED:-5}
+      TOTAL_HEADLINES: ${TOTAL_HEADLINES:-18}
+      PAPER_NAME: ${PAPER_NAME:-THE KINDLE TIMES}
+      UPDATE_TIMES: ${UPDATE_TIMES:-07:00,13:00,19:00}
+      TZ: ${TZ:-Europe/London}
+      KINDLE_WIDTH: ${KINDLE_WIDTH:-1264}
+      KINDLE_HEIGHT: ${KINDLE_HEIGHT:-1680}
+      PORT: ${PORT:-8080}
+      FETCH_ON_STARTUP: ${FETCH_ON_STARTUP:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${HOST_PORT:-8080}:8080"
+    volumes:
+      - kindle_frontpage_data:/app/data
+
+volumes:
+  kindle_frontpage_data:
